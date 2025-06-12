@@ -1,8 +1,9 @@
 from collections.abc import AsyncIterable
 from typing import Any, Literal
 
-import httpx
 import os
+import httpx
+from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import tool
@@ -12,14 +13,9 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import create_react_agent
 from pydantic import BaseModel
 
-# Create server parameters for stdio connection
-from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
-from langchain_mcp_adapters.tools import load_mcp_tools
 import asyncio
 
 memory = MemorySaver()
-
 
 class ResponseFormat(BaseModel):
     """Respond to the user in this format."""
@@ -37,7 +33,6 @@ class CurrencyAgent:
         'If the user asks about anything other than currency conversion or exchange rates, '
         'politely state that you cannot help with that topic and can only assist with currency-related queries. '
         'Do not attempt to answer unrelated questions or use tools for other purposes.'
-        # 'Set response status to input_required if the user needs to provide more information.'
         'Set response status to error if there is an error while processing the request and explain what the error is.'
         'Set response status to completed if the request is complete.'
     )
@@ -54,29 +49,28 @@ class CurrencyAgent:
                  temperature=0
              )
         
-        self.server_params = StdioServerParameters(
-            command="python",
-            args=["/Users/wsun/Desktop/UW/Research/a2a-samples/samples/python/agents/langgraph/app/mcp_currency_server.py"],
-        )
+        # Use the correct URL for streamable-http transport
+        self.server_url = "http://localhost:8000"
         
-        # Store session and tools references
-        self.session = None
+        # Store client and tools references
+        self.client = None
         self.tools = None
         self.graph = None
 
     async def _initialize_tools(self):
-        """Initialize MCP tools and keep the session alive."""
+        """Initialize MCP tools using MultiServerMCPClient."""
         if self.tools is None:
-            # Store the context manager itself, not just the streams
-            self.stdio_client_cm = stdio_client(self.server_params)
-            self.read, self.write = await self.stdio_client_cm.__aenter__()
+            # Use MultiServerMCPClient for streamable-http transport
+            self.client = MultiServerMCPClient(
+                {
+                    "currency": {
+                        "url": f"{self.server_url}/mcp/",
+                        "transport": "streamable_http",
+                    }
+                }
+            )
             
-            self.session_cm = ClientSession(self.read, self.write)
-            self.session = await self.session_cm.__aenter__()
-            
-            await self.session.initialize()
-            self.tools = await load_mcp_tools(self.session)
-            print(f"Loaded tools: {self.tools}")
+            self.tools = await self.client.get_tools()
             
             self.graph = create_react_agent(
                 self.model,
@@ -121,23 +115,12 @@ class CurrencyAgent:
     async def cleanup(self):
         """Clean up resources when done."""
         try:
-            if hasattr(self, 'session_cm') and self.session_cm:
-                await self.session_cm.__aexit__(None, None, None)
-                self.session_cm = None
-                self.session = None
+            if self.client:
+                await self.client.cleanup()
+                self.client = None
+                self.tools = None
         except Exception as e:
-            print(f"Error cleaning up session: {e}")
-        
-        try:
-            if hasattr(self, 'stdio_client_cm') and self.stdio_client_cm:
-                await self.stdio_client_cm.__aexit__(None, None, None)
-                self.stdio_client_cm = None
-                if hasattr(self, 'read'):
-                    self.read = None
-                if hasattr(self, 'write'):
-                    self.write = None
-        except Exception as e:
-            print(f"Error cleaning up stdio client: {e}")
+            print(f"Error cleaning up client: {e}")
 
     def get_agent_response(self, config):
         current_state = self.graph.get_state(config)

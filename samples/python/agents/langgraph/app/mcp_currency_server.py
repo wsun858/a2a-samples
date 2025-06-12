@@ -19,6 +19,5 @@ def get_exchange_rate(currency_from: str = 'USD', currency_to: str = 'EUR', curr
     return currency_service.get_exchange_rate(currency_from, currency_to, currency_date)
 
 if __name__ == "__main__":
-    # a = get_exchange_rate()
-    # print(a)
-    mcp.run(transport="stdio")
+    # mcp.run(transport="stdio") # local
+    mcp.run(transport="streamable-http") # default port 8000
