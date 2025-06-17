@@ -44,15 +44,14 @@ class PdfSplitAgentExecutor(AgentExecutor):
         task = context.current_task
         if not task:
             task = new_task(context.message)
-            event_queue.enqueue_event(task)
+            await event_queue.enqueue_event(task)
         updater = TaskUpdater(event_queue, task.id, task.contextId)
         try:
             async for item in self.agent.stream(query, task.contextId):
                 is_task_complete = item['is_task_complete']
-                require_user_input = item['require_user_input']
 
-                if not is_task_complete and not require_user_input:
-                    updater.update_status(
+                if not is_task_complete:
+                    await updater.update_status(
                         TaskState.working,
                         new_agent_text_message(
                             item['content'],
@@ -60,23 +59,12 @@ class PdfSplitAgentExecutor(AgentExecutor):
                             task.id,
                         ),
                     )
-                elif require_user_input:
-                    updater.update_status(
-                        TaskState.input_required,
-                        new_agent_text_message(
-                            item['content'],
-                            task.contextId,
-                            task.id,
-                        ),
-                        final=True,
-                    )
-                    break
                 else:
-                    updater.add_artifact(
+                    await updater.add_artifact(
                         [Part(root=TextPart(text=item['content']))],
                         name='pdf_split_result',
                     )
-                    updater.complete()
+                    await updater.complete()
                     break
 
         except Exception as e:
